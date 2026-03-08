@@ -60,6 +60,7 @@ public sealed class OllamaAgentPlugin : Plugin
         // Trigger: message begins with !BotName followed by a space
         // (@ is intercepted by MCGalaxy as a whisper before the chat event fires)
         if (message.Length == 0 || message[0] != '!') return;
+
         int space = message.IndexOf(' ');
         if (space < 0) return;
 
@@ -205,43 +206,84 @@ public sealed class OllamaAgentPlugin : Plugin
     // System prompt
     // =========================================================================
 
-    const int ScanRadius  = 4; // blocks in each direction for world scan
+    const int ScanRadius   = 4;  // blocks in each direction for world scan
     const int PlayerRadius = 20; // blocks for nearby-player detection
 
     string BuildSystemPrompt(PlayerBot bot) {
         Position pos = bot.Pos;
         int bx = pos.BlockX, by = pos.BlockY, bz = pos.BlockZ;
+        Level lvl = bot.level;
 
         string nearbyBlocks  = ScanNearbyBlocks(bot, bx, by, bz);
         string nearbyPlayers = ScanNearbyPlayers(bot, bx, by, bz);
+        string otherBots     = ListOtherBots(bot);
 
         var sb = new StringBuilder();
+
+        // Identity & game context
         sb.AppendFormat(
-            "You are a Minecraft Classic bot named {0} living in a voxel world. " +
-            "Players talk to you by typing !{1} followed by their message. " +
-            "You can respond in natural language and optionally take actions. " +
-            "\n\nYour current position is block ({2}, {3}, {4}). " +
-            "Coordinates are (x, y, z) where y is height.",
-            bot.DisplayName, bot.name, bx, by, bz);
+            "You are {0}, an AI agent inside ClassiCube — a creative block-building game " +
+            "where the world is made entirely of 1x1x1 metre cubes on a fixed integer grid. " +
+            "Players address you by typing !{1} followed by their message.\n\n",
+            bot.DisplayName, bot.name);
 
+        // Coordinate system & spatial translation
+        sb.AppendFormat(
+            "WORLD & COORDINATES\n" +
+            "World size: x=0..{0}, y=0..{1}, z=0..{2}. " +
+            "y=0 is the bedrock floor; y increases upward.\n" +
+            "Your position: ({3},{4},{5}).\n" +
+            "Spatial words map to axes: up=+y, down=-y, north=-z, south=+z, east=+x, west=-x.\n" +
+            "Size words: tall/high=y span, wide=x span, long/deep=z span.\n" +
+            "To build a wall 5 blocks wide facing east at your feet, place blocks at " +
+            "({3},{4},{5}), ({3},{4},{6}), ({3},{4},{7}), ({3},{4},{8}), ({3},{4},{9}).\n\n",
+            lvl.Width - 1, lvl.Height - 1, lvl.Length - 1,
+            bx, by, bz,
+            bz + 1, bz + 2, bz + 3, bz + 4);
+
+        // Actions
         sb.Append(
-            "\n\nAvailable actions (include as separate lines in your reply):" +
-            "\n  /move <x> <y> <z>              — walk to block coordinates" +
-            "\n  /place <x> <y> <z> <blockId>   — place or remove a block (0=air removes)" +
-            "\n\nCommon block IDs: 0=air, 1=stone, 2=grass, 3=dirt, 4=cobblestone, " +
-            "5=wood, 7=bedrock, 12=sand, 13=gravel, 17=leaves." +
-            "\n\nOnly include action lines when they make sense. Keep replies concise and in-character.");
+            "ACTIONS (emit as plain lines in your reply, one per line)\n" +
+            "  /move <x> <y> <z>               walk to those block coords\n" +
+            "  /place <x> <y> <z> <blockId>    place a block (blockId 0 = remove)\n" +
+            "Emit multiple /place lines to build structures. " +
+            "Only emit actions when they make sense for the request.\n\n");
 
+        // Full block reference
+        sb.Append(
+            "BLOCK IDs\n" +
+            "Natural:  0=air, 1=stone, 2=grass, 3=dirt, 4=cobblestone, 7=bedrock,\n" +
+            "          12=sand, 13=gravel, 14=gold_ore, 15=iron_ore, 16=coal_ore\n" +
+            "Wood/plant: 5=planks, 17=log, 18=leaves, 6=sapling, 19=sponge\n" +
+            "Fluid:    8=water, 9=still_water, 10=lava, 11=still_lava\n" +
+            "Processed: 20=glass, 41=gold_block, 42=iron_block, 43=double_slab,\n" +
+            "           44=slab, 45=brick, 46=tnt, 47=bookshelf,\n" +
+            "           48=mossy_cobblestone, 49=obsidian\n" +
+            "Cloth:    21=red, 22=orange, 23=yellow, 24=chartreuse, 25=green,\n" +
+            "          26=spring_green, 27=cyan, 28=capri, 29=ultramarine,\n" +
+            "          30=violet, 31=purple, 32=magenta, 33=rose,\n" +
+            "          34=dark_gray, 35=light_gray, 36=white\n" +
+            "Plants:   37=dandelion, 38=rose_flower, 39=brown_mushroom, 40=red_mushroom\n\n");
+
+        // Multi-agent coordination
+        if (otherBots.Length > 0)
+            sb.AppendFormat(
+                "OTHER AGENTS IN THIS WORLD\n{0}\n" +
+                "When a task is large, coordinate: divide the work spatially (e.g. you take the " +
+                "west half, another bot takes the east half) or by role (builder vs. decorator). " +
+                "Mention your plan so players can relay it to the other bots.\n\n",
+                otherBots);
+
+        // Live world state
         if (nearbyBlocks.Length > 0)
-            sb.AppendFormat("\n\nNearby non-air blocks (within {0} blocks): {1}", ScanRadius, nearbyBlocks);
+            sb.AppendFormat("NEARBY BLOCKS (within {0} blocks): {1}\n\n", ScanRadius, nearbyBlocks);
         else
-            sb.AppendFormat("\n\nNo non-air blocks detected within {0} blocks of you.", ScanRadius);
+            sb.AppendFormat("NEARBY BLOCKS: open area within {0} blocks.\n\n", ScanRadius);
 
         if (nearbyPlayers.Length > 0)
-            sb.AppendFormat("\n\nNearby players: {0}", nearbyPlayers);
-        else
-            sb.AppendFormat("\n\nNo players are within {0} blocks of you.", PlayerRadius);
+            sb.AppendFormat("NEARBY PLAYERS: {0}\n\n", nearbyPlayers);
 
+        sb.Append("Keep replies concise and in-character.");
         return sb.ToString();
     }
 
@@ -251,12 +293,12 @@ public sealed class OllamaAgentPlugin : Plugin
         for (int dx = -ScanRadius; dx <= ScanRadius; dx++)
         for (int dy = -ScanRadius; dy <= ScanRadius; dy++)
         for (int dz = -ScanRadius; dz <= ScanRadius; dz++) {
-            int bx = cx + dx, by = cy + dy, bz = cz + dz;
-            if (bx < 0 || by < 0 || bz < 0) continue;
-            ushort block = lvl.GetBlock((ushort)bx, (ushort)by, (ushort)bz);
+            int x = cx + dx, y = cy + dy, z = cz + dz;
+            if (x < 0 || y < 0 || z < 0) continue;
+            ushort block = lvl.GetBlock((ushort)x, (ushort)y, (ushort)z);
             if (block == Block.Air) continue;
             if (sb.Length > 0) sb.Append(", ");
-            sb.AppendFormat("({0},{1},{2})={3}", bx, by, bz, block);
+            sb.AppendFormat("({0},{1},{2})={3}", x, y, z, block);
         }
         return sb.ToString();
     }
@@ -265,14 +307,20 @@ public sealed class OllamaAgentPlugin : Plugin
         var sb = new StringBuilder();
         foreach (Player p in PlayerInfo.Online.Items) {
             if (p.level != bot.level) continue;
-            int dx = p.Pos.BlockX - cx;
-            int dy = p.Pos.BlockY - cy;
-            int dz = p.Pos.BlockZ - cz;
-            int dist = (int)Math.Sqrt(dx*dx + dy*dy + dz*dz);
-            if (dist > PlayerRadius) continue;
+            int dx = p.Pos.BlockX - cx, dy = p.Pos.BlockY - cy, dz = p.Pos.BlockZ - cz;
+            if ((int)Math.Sqrt(dx*dx + dy*dy + dz*dz) > PlayerRadius) continue;
             if (sb.Length > 0) sb.Append(", ");
-            sb.AppendFormat("{0} at ({1},{2},{3})",
-                p.DisplayName, p.Pos.BlockX, p.Pos.BlockY, p.Pos.BlockZ);
+            sb.AppendFormat("{0} at ({1},{2},{3})", p.DisplayName, p.Pos.BlockX, p.Pos.BlockY, p.Pos.BlockZ);
+        }
+        return sb.ToString();
+    }
+
+    string ListOtherBots(PlayerBot self) {
+        var sb = new StringBuilder();
+        foreach (PlayerBot b in self.level.Bots.Items) {
+            if (b.name.CaselessEq(self.name)) continue;
+            if (sb.Length > 0) sb.Append(", ");
+            sb.AppendFormat("{0} at ({1},{2},{3})", b.DisplayName, b.Pos.BlockX, b.Pos.BlockY, b.Pos.BlockZ);
         }
         return sb.ToString();
     }
