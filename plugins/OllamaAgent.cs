@@ -31,7 +31,7 @@ public sealed class OllamaAgentPlugin : Plugin
 
     // --- Configuration -------------------------------------------------------
     const string OllamaUrl   = "http://localhost:11434/api/chat";
-    const string OllamaModel = "llama3";
+    const string OllamaModel = "gemma3";
     const int    HistoryLimit = 20; // max conversation turns kept per bot
     // -------------------------------------------------------------------------
 
