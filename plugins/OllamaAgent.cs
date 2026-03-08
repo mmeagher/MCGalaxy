@@ -7,7 +7,8 @@
 //
 // Usage:
 //   Create a bot with /bot add <name>, then players address it with:
-//     @<BotName> hello there
+//     !<BotName> hello there
+//   (Note: @ is used by MCGalaxy for whispers, so ! is used instead)
 //   The bot will respond via level chat and optionally move or place blocks.
 //
 // Configuration:
@@ -56,8 +57,9 @@ public sealed class OllamaAgentPlugin : Plugin
     // =========================================================================
 
     void OnChat(Player p, string message) {
-        // Trigger: message begins with @BotName followed by a space
-        if (message.Length == 0 || message[0] != '@') return;
+        // Trigger: message begins with !BotName followed by a space
+        // (@ is intercepted by MCGalaxy as a whisper before the chat event fires)
+        if (message.Length == 0 || message[0] != '!') return;
         int space = message.IndexOf(' ');
         if (space < 0) return;
 
@@ -205,7 +207,7 @@ public sealed class OllamaAgentPlugin : Plugin
         Position pos = bot.Pos;
         return string.Format(
             "You are a Minecraft Classic bot named {0} living in a voxel world. " +
-            "Players talk to you by typing @{1} followed by their message. " +
+            "Players talk to you by typing !{1} followed by their message. " +
             "You can respond in natural language and optionally take actions. " +
             "\n\nAvailable actions (include as separate lines in your reply):" +
             "\n  /move <x> <y> <z>              — walk to block coordinates" +

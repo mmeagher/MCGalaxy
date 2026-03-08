@@ -21,12 +21,14 @@ No server restart is required.
 
 ## Usage
 
-Create a bot with the standard MCGalaxy bot command, then players address it by prefixing their message with `@<BotName>`:
+Create a bot with the standard MCGalaxy bot command, then players address it by prefixing their message with `!<BotName>`:
 
 ```
 /bot add Sage
-@Sage what should I build here?
+!Sage what should I build here?
 ```
+
+> **Note:** `@name` is reserved by MCGalaxy for player whispers and is intercepted before the chat event fires, so `!` is used instead.
 
 The bot responds in level chat as `Sage: ...`. Each bot maintains its own conversation history, so multiple bots can run independently in the same or different levels.
 
@@ -58,7 +60,7 @@ The system prompt instructs the LLM to only emit action lines when they make sen
 | Component | Detail |
 |---|---|
 | Event hook | `OnPlayerChatEvent` — fires on every player chat message |
-| Trigger | Message starts with `@<BotName> ` where the bot exists in the player's level |
+| Trigger | Message starts with `!<BotName> ` where the bot exists in the player's level |
 | Ollama call | `POST /api/chat` with `"stream": false`, run on a `ThreadPool` thread so the game loop is never blocked |
 | Memory | Per-bot `List<OllamaMsg>` starting with a system prompt; trimmed to `HistoryLimit` turns |
 | Bot movement | Sets `bot.TargetPos` and `bot.movement = true` — uses the existing MCGalaxy bot movement scheduler |
