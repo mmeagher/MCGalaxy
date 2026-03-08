@@ -90,8 +90,10 @@ public sealed class OllamaAgentPlugin : Plugin
         List<OllamaMsg> history = GetOrCreateHistory(bot);
 
         // Snapshot the history for the HTTP call (avoids holding the lock during I/O)
+        // Always refresh the system prompt (index 0) so world/player state is current
         List<OllamaMsg> snapshot;
         lock (history) {
+            history[0] = new OllamaMsg("system", BuildSystemPrompt(bot));
             history.Add(new OllamaMsg("user",
                 string.Format("[{0} says]: {1}", sender.name, userText)));
             snapshot = new List<OllamaMsg>(history);
@@ -203,22 +205,76 @@ public sealed class OllamaAgentPlugin : Plugin
     // System prompt
     // =========================================================================
 
+    const int ScanRadius  = 4; // blocks in each direction for world scan
+    const int PlayerRadius = 20; // blocks for nearby-player detection
+
     string BuildSystemPrompt(PlayerBot bot) {
         Position pos = bot.Pos;
-        return string.Format(
+        int bx = pos.BlockX, by = pos.BlockY, bz = pos.BlockZ;
+
+        string nearbyBlocks  = ScanNearbyBlocks(bot, bx, by, bz);
+        string nearbyPlayers = ScanNearbyPlayers(bot, bx, by, bz);
+
+        var sb = new StringBuilder();
+        sb.AppendFormat(
             "You are a Minecraft Classic bot named {0} living in a voxel world. " +
             "Players talk to you by typing !{1} followed by their message. " +
             "You can respond in natural language and optionally take actions. " +
+            "\n\nYour current position is block ({2}, {3}, {4}). " +
+            "Coordinates are (x, y, z) where y is height.",
+            bot.DisplayName, bot.name, bx, by, bz);
+
+        sb.Append(
             "\n\nAvailable actions (include as separate lines in your reply):" +
             "\n  /move <x> <y> <z>              — walk to block coordinates" +
-            "\n  /place <x> <y> <z> <blockId>   — place or remove a block" +
+            "\n  /place <x> <y> <z> <blockId>   — place or remove a block (0=air removes)" +
             "\n\nCommon block IDs: 0=air, 1=stone, 2=grass, 3=dirt, 4=cobblestone, " +
             "5=wood, 7=bedrock, 12=sand, 13=gravel, 17=leaves." +
-            "\n\nOnly include action lines when they make sense; otherwise just reply with dialogue. " +
-            "Keep replies concise and in-character. " +
-            "Your current position is block ({2}, {3}, {4}).",
-            bot.DisplayName, bot.name,
-            pos.BlockX, pos.BlockY, pos.BlockZ);
+            "\n\nOnly include action lines when they make sense. Keep replies concise and in-character.");
+
+        if (nearbyBlocks.Length > 0)
+            sb.AppendFormat("\n\nNearby non-air blocks (within {0} blocks): {1}", ScanRadius, nearbyBlocks);
+        else
+            sb.AppendFormat("\n\nNo non-air blocks detected within {0} blocks of you.", ScanRadius);
+
+        if (nearbyPlayers.Length > 0)
+            sb.AppendFormat("\n\nNearby players: {0}", nearbyPlayers);
+        else
+            sb.AppendFormat("\n\nNo players are within {0} blocks of you.", PlayerRadius);
+
+        return sb.ToString();
+    }
+
+    string ScanNearbyBlocks(PlayerBot bot, int cx, int cy, int cz) {
+        var sb = new StringBuilder();
+        Level lvl = bot.level;
+        for (int dx = -ScanRadius; dx <= ScanRadius; dx++)
+        for (int dy = -ScanRadius; dy <= ScanRadius; dy++)
+        for (int dz = -ScanRadius; dz <= ScanRadius; dz++) {
+            int bx = cx + dx, by = cy + dy, bz = cz + dz;
+            if (bx < 0 || by < 0 || bz < 0) continue;
+            ushort block = lvl.GetBlock((ushort)bx, (ushort)by, (ushort)bz);
+            if (block == Block.Air) continue;
+            if (sb.Length > 0) sb.Append(", ");
+            sb.AppendFormat("({0},{1},{2})={3}", bx, by, bz, block);
+        }
+        return sb.ToString();
+    }
+
+    string ScanNearbyPlayers(PlayerBot bot, int cx, int cy, int cz) {
+        var sb = new StringBuilder();
+        foreach (Player p in PlayerInfo.Online.Items) {
+            if (p.level != bot.level) continue;
+            int dx = p.Pos.BlockX - cx;
+            int dy = p.Pos.BlockY - cy;
+            int dz = p.Pos.BlockZ - cz;
+            int dist = (int)Math.Sqrt(dx*dx + dy*dy + dz*dz);
+            if (dist > PlayerRadius) continue;
+            if (sb.Length > 0) sb.Append(", ");
+            sb.AppendFormat("{0} at ({1},{2},{3})",
+                p.DisplayName, p.Pos.BlockX, p.Pos.BlockY, p.Pos.BlockZ);
+        }
+        return sb.ToString();
     }
 
 
