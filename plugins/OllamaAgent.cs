@@ -1,3 +1,7 @@
+//dotnetref System.Net.Http.dll
+//dotnetref System.Private.Uri.dll
+//dotnetref System.Threading.Thread.dll
+//dotnetref System.ComponentModel.TypeConverter.dll
 // OllamaAgent.cs — LLM-controlled bots via Ollama
 //
 // Deploy:

@@ -242,8 +242,7 @@ namespace MCGalaxy.Modules.Compiling
         
         protected override string GetCompilerArgs(string dotnetPath, string args) {
             ProcessStartInfo psi = CreateStartInfo(dotnetPath, "--list-sdks");
-            string rootFolder    = Path.GetDirectoryName(dotnetPath);
-            
+
             using (Process p = new Process())
             {
                 p.StartInfo = psi;
@@ -251,10 +250,22 @@ namespace MCGalaxy.Modules.Compiling
 
                 string sdk = p.StandardOutput.ReadLine();
                 p.WaitForExit();
-                
-                string compileArgs = Path.Combine(rootFolder, "sdk", sdk, "Roslyn", "bincore", "csc.dll");
-                // e.g. /home/test/.dotnet/dotnet exec "/home/test/.dotnet/sdk/6.0.300/Roslyn/bincore/csc.dll" [COMPILER ARGS]
-                return "exec " + Quote(compileArgs) + " " + args;
+
+                // dotnet --list-sdks outputs lines like "8.0.124 [/usr/lib/dotnet/sdk]"
+                // Parse version and path separately
+                string sdkPath;
+                int bracketIdx = sdk.IndexOf('[');
+                if (bracketIdx >= 0) {
+                    string version   = sdk.Substring(0, bracketIdx).Trim();
+                    string sdkFolder = sdk.Substring(bracketIdx + 1).TrimEnd(']', ' ');
+                    sdkPath = Path.Combine(sdkFolder, version, "Roslyn", "bincore", "csc.dll");
+                } else {
+                    string rootFolder = Path.GetDirectoryName(dotnetPath);
+                    sdkPath = Path.Combine(rootFolder, "sdk", sdk.Trim(), "Roslyn", "bincore", "csc.dll");
+                }
+
+                // e.g. dotnet exec "/usr/lib/dotnet/sdk/8.0.124/Roslyn/bincore/csc.dll" [COMPILER ARGS]
+                return "exec " + Quote(sdkPath) + " " + args;
             }
         }
         
