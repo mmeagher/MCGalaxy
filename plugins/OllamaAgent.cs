@@ -88,19 +88,19 @@ public sealed class OllamaAgentPlugin : Plugin
     // =========================================================================
 
     void QueryOllama(Player sender, PlayerBot bot, string userText) {
-        List<OllamaMsg> history = GetOrCreateHistory(bot);
-
-        // Snapshot the history for the HTTP call (avoids holding the lock during I/O)
-        // Always refresh the system prompt (index 0) so world/player state is current
-        List<OllamaMsg> snapshot;
-        lock (history) {
-            history[0] = new OllamaMsg("system", BuildSystemPrompt(bot));
-            history.Add(new OllamaMsg("user",
-                string.Format("[{0} says]: {1}", sender.name, userText)));
-            snapshot = new List<OllamaMsg>(history);
-        }
-
         try {
+            List<OllamaMsg> history = GetOrCreateHistory(bot);
+
+            // Snapshot the history for the HTTP call (avoids holding the lock during I/O)
+            // Always refresh the system prompt (index 0) so world/player state is current
+            List<OllamaMsg> snapshot;
+            lock (history) {
+                history[0] = new OllamaMsg("system", BuildSystemPrompt(bot));
+                history.Add(new OllamaMsg("user",
+                    string.Format("[{0} says]: {1}", sender.name, userText)));
+                snapshot = new List<OllamaMsg>(history);
+            }
+
             string requestJson = BuildRequest(OllamaModel, snapshot);
             var    content     = new StringContent(requestJson, Encoding.UTF8, "application/json");
             var    response    = http.PostAsync(OllamaUrl, content).Result;
@@ -242,12 +242,25 @@ public sealed class OllamaAgentPlugin : Plugin
             bz + 1, bz + 2, bz + 3, bz + 4);
 
         // Actions
-        sb.Append(
+        sb.AppendFormat(
             "ACTIONS (emit as plain lines in your reply, one per line)\n" +
             "  /move <x> <y> <z>               walk to those block coords\n" +
-            "  /place <x> <y> <z> <blockId>    place a block (blockId 0 = remove)\n" +
-            "Emit multiple /place lines to build structures. " +
-            "Only emit actions when they make sense for the request.\n\n");
+            "  /place <x> <y> <z> <blockId>    place a block (blockId 0 = remove)\n\n" +
+            "BUILDING RULES — read carefully:\n" +
+            "* Each block requires its own /place line with exact absolute coordinates.\n" +
+            "* You can place blocks anywhere in the world without being adjacent — you do NOT need to be standing next to a block to place it.\n" +
+            "* To build a structure, compute every block coordinate yourself and emit one /place per block.\n" +
+            "* Example — a 3-wide, 2-tall stone wall running east from your position ({0},{1},{2}):\n" +
+            "    /place {0} {1} {2} 1\n" +
+            "    /place {3} {1} {2} 1\n" +
+            "    /place {4} {1} {2} 1\n" +
+            "    /place {0} {5} {2} 1\n" +
+            "    /place {3} {5} {2} 1\n" +
+            "    /place {4} {5} {2} 1\n" +
+            "* Only emit /move when you want to reposition yourself. It does NOT place blocks.\n" +
+            "* Never describe what you are building with action lines — just emit the lines.\n\n",
+            bx, by, bz,
+            bx + 1, bx + 2, by + 1);
 
         // Full block reference
         sb.Append(

@@ -1,11 +1,13 @@
 # OllamaAgent
 
-A MCGalaxy plugin that gives in-game bots conversational AI powered by a local [Ollama](https://ollama.com) LLM. Bots can chat with players, walk around the world, and place or remove blocks.
+A MCGalaxy plugin that gives in-game bots conversational AI powered by a local [Ollama](https://ollama.com) LLM. Bots can chat with players, walk around the world, and place or remove blocks in a single response.
+
+For multi-step building tasks (structures that require planning across multiple LLM calls) see **OllamaAgentLoop**.
 
 ## Requirements
 
 - MCGalaxy server (with the Compiler plugin enabled — included by default)
-- [Ollama](https://ollama.com) running locally with at least one model pulled (e.g. `ollama pull llama3`)
+- [Ollama](https://ollama.com) running locally with at least one model pulled (e.g. `ollama pull gemma3`)
 
 ## Deployment
 
@@ -39,7 +41,7 @@ Edit the constants near the top of `OllamaAgent.cs` before compiling:
 | Constant | Default | Description |
 |---|---|---|
 | `OllamaUrl` | `http://localhost:11434/api/chat` | Ollama API endpoint |
-| `OllamaModel` | `llama3` | Model name (must be pulled in Ollama) |
+| `OllamaModel` | `gemma3` | Model name (must be pulled in Ollama) |
 | `HistoryLimit` | `20` | Max conversation turns kept per bot |
 
 ## Bot actions
@@ -49,11 +51,20 @@ The LLM can embed action lines anywhere in its reply. All other text is spoken a
 | Action line | Effect |
 |---|---|
 | `/move <x> <y> <z>` | Walk the bot to the given block coordinates |
-| `/place <x> <y> <z> <blockId>` | Place or remove a block in the world |
+| `/place <x> <y> <z> <blockId>` | Place or remove a block in the world (`0` = air/remove) |
 
-Common block IDs: `0`=air, `1`=stone, `2`=grass, `3`=dirt, `4`=cobblestone, `5`=wood, `7`=bedrock, `12`=sand, `13`=gravel, `17`=leaves.
+Full block ID reference is included in the system prompt — see `OllamaAgent-system-prompt.md`.
 
-The system prompt instructs the LLM to only emit action lines when they make sense, but you can make this stricter by editing `BuildSystemPrompt` in the source.
+## World awareness
+
+The system prompt automatically includes:
+
+- **World size** and the bot's current position
+- **Nearby blocks** (within 4 blocks in each direction) — non-air blocks listed as `(x,y,z)=blockId`
+- **Nearby players** (within 20 blocks) — name and position
+- **Other bots** in the same level — name and position, with multi-agent coordination guidance
+
+These are refreshed on every request so the bot always has current state.
 
 ## Architecture
 
@@ -62,37 +73,18 @@ The system prompt instructs the LLM to only emit action lines when they make sen
 | Event hook | `OnPlayerChatEvent` — fires on every player chat message |
 | Trigger | Message starts with `!<BotName> ` where the bot exists in the player's level |
 | Ollama call | `POST /api/chat` with `"stream": false`, run on a `ThreadPool` thread so the game loop is never blocked |
-| Memory | Per-bot `List<OllamaMsg>` starting with a system prompt; trimmed to `HistoryLimit` turns |
+| Memory | Per-bot `List<OllamaMsg>` starting with a system prompt (refreshed each call); trimmed to `HistoryLimit` turns |
 | Bot movement | Sets `bot.TargetPos` and `bot.movement = true` — uses the existing MCGalaxy bot movement scheduler |
 | Block placement | `level.SetTile` + `level.BroadcastRevert` to update all players in the level |
 
-## Extending the plugin
+## Choosing between OllamaAgent and OllamaAgentLoop
 
-**Give the bot world awareness** — scan blocks around the bot's position and include them in the system prompt:
+| | OllamaAgent | OllamaAgentLoop |
+|---|---|---|
+| LLM calls per task | 1 | Up to 15 (configurable) |
+| Suitable for | Chat, small builds | Large structures, multi-step plans |
+| Signals required | None | `/continue` / `/done` |
+| Concurrency guard | None | Yes — one task per bot at a time |
+| Timeout | 30 s | 180 s |
 
-```csharp
-// Inside BuildSystemPrompt, after getting pos:
-var sb = new StringBuilder();
-for (int dx = -3; dx <= 3; dx++)
-for (int dy = -3; dy <= 3; dy++)
-for (int dz = -3; dz <= 3; dz++) {
-    ushort bx = (ushort)(pos.BlockX + dx),
-           by = (ushort)(pos.BlockY + dy),
-           bz = (ushort)(pos.BlockZ + dz);
-    BlockID block = bot.level.GetBlock(bx, by, bz);
-    if (block != Block.Air)
-        sb.AppendFormat("({0},{1},{2})={3} ", bx, by, bz, block);
-}
-// Append sb.ToString() to the system prompt
-```
-
-**Give the bot player awareness** — list nearby players in the system prompt:
-
-```csharp
-foreach (Player p in PlayerInfo.Online.Items) {
-    if (p.level != bot.level) continue;
-    // include p.name and p.Pos.BlockX/Y/Z in the prompt
-}
-```
-
-**Reset a bot's memory** — unload and reload the plugin, or add a `/botforget <name>` command that calls `histories.Remove(name)`.
+> Only load one plugin at a time — both respond to the same `!BotName` trigger.
