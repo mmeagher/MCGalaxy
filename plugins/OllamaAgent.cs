@@ -32,7 +32,9 @@ public sealed class OllamaAgentPlugin : Plugin
     // --- Configuration -------------------------------------------------------
     const string OllamaUrl   = "http://localhost:11434/api/chat";
     const string OllamaModel = "gemma3";
-    const int    HistoryLimit = 20; // max conversation turns kept per bot
+    const int    HistoryLimit     = 20;   // max conversation turns kept per bot
+    const int    MaxBlocksPerOp   = 2000; // max blocks any single primitive can place
+    const int    MaxBlocksPerTurn = 8000; // total blocks across all primitives in one reply
     // -------------------------------------------------------------------------
 
     static readonly HttpClient http =
@@ -151,23 +153,26 @@ public sealed class OllamaAgentPlugin : Plugin
 
     void ProcessReply(PlayerBot bot, string reply) {
         var dialogue = new StringBuilder();
+        int blocksThisTurn = 0;
 
         foreach (string raw in reply.Split('\n')) {
             string line = raw.Trim();
-            if (line.StartsWith("/move ")) {
-                TryMove(bot, line);
-            } else if (line.StartsWith("/place ")) {
-                TryPlace(bot, line);
-            } else if (line.Length > 0) {
-                if (dialogue.Length > 0) dialogue.Append(' ');
-                dialogue.Append(line);
-            }
+            if      (line.StartsWith("/move "))    { TryMove(bot, line); }
+            else if (line.StartsWith("/place "))   { TryPlace(bot, line); blocksThisTurn++; }
+            else if (line.StartsWith("/box "))     { blocksThisTurn += TryBox(bot, line, blocksThisTurn); }
+            else if (line.StartsWith("/walls "))   { blocksThisTurn += TryWalls(bot, line, blocksThisTurn); }
+            else if (line.StartsWith("/floor ") ||
+                     line.StartsWith("/roof "))    { blocksThisTurn += TryFloor(bot, line, blocksThisTurn); }
+            else if (line.StartsWith("/column "))  { blocksThisTurn += TryColumn(bot, line, blocksThisTurn); }
+            else if (line.StartsWith("/clear "))   { blocksThisTurn += TryClear(bot, line, blocksThisTurn); }
+            else if (line.StartsWith("/door "))    { TryDoor(bot, line); }
+            else if (line.StartsWith("/window "))  { TryWindow(bot, line); }
+            else if (line.Length > 0)              { if (dialogue.Length > 0) dialogue.Append(' '); dialogue.Append(line); }
         }
 
         string speech = dialogue.ToString().Trim();
         if (speech.Length == 0) return;
 
-        // Broadcast as level chat attributed to the bot
         string msg = string.Format("{0}&f: {1}", bot.ColoredName, speech);
         Chat.Message(ChatScope.Level, msg, bot.level, null);
     }
@@ -198,7 +203,147 @@ public sealed class OllamaAgentPlugin : Plugin
 
         Level lvl = bot.level;
         lvl.SetTile(bx, by, bz, (byte)blockId);
-        lvl.BroadcastRevert(bx, by, bz); // sends the updated block to all players in the level
+        lvl.BroadcastRevert(bx, by, bz);
+    }
+
+
+    // =========================================================================
+    // Building primitives
+    // =========================================================================
+
+    static void NormalizeAndClamp(ref int lo, ref int hi, int max) {
+        if (lo > hi) { int t = lo; lo = hi; hi = t; }
+        if (lo < 0) lo = 0;
+        if (hi > max) hi = max;
+    }
+
+    // Fills a cuboid region with one block type. Returns blocks placed (0 if limit exceeded).
+    int FillRegion(PlayerBot bot, int x1, int y1, int z1, int x2, int y2, int z2, int block, int blocksUsed) {
+        Level lvl = bot.level;
+        NormalizeAndClamp(ref x1, ref x2, lvl.MaxX);
+        NormalizeAndClamp(ref y1, ref y2, lvl.MaxY);
+        NormalizeAndClamp(ref z1, ref z2, lvl.MaxZ);
+        int count = (x2 - x1 + 1) * (y2 - y1 + 1) * (z2 - z1 + 1);
+        if (count > MaxBlocksPerOp || blocksUsed + count > MaxBlocksPerTurn) {
+            Logger.Log(LogType.Warning, "OllamaAgent: block limit exceeded, skipping operation");
+            return 0;
+        }
+        byte b = (byte)block;
+        for (int x = x1; x <= x2; x++)
+        for (int y = y1; y <= y2; y++)
+        for (int z = z1; z <= z2; z++) lvl.SetTile((ushort)x, (ushort)y, (ushort)z, b);
+        for (int x = x1; x <= x2; x++)
+        for (int y = y1; y <= y2; y++)
+        for (int z = z1; z <= z2; z++) lvl.BroadcastRevert((ushort)x, (ushort)y, (ushort)z);
+        return count;
+    }
+
+    // /box <x1> <y1> <z1> <x2> <y2> <z2> <block>
+    int TryBox(PlayerBot bot, string line, int blocksUsed) {
+        string[] p = line.Split(' ');
+        if (p.Length < 8) return 0;
+        int x1, y1, z1, x2, y2, z2, block;
+        if (!int.TryParse(p[1], out x1) || !int.TryParse(p[2], out y1) || !int.TryParse(p[3], out z1) ||
+            !int.TryParse(p[4], out x2) || !int.TryParse(p[5], out y2) || !int.TryParse(p[6], out z2) ||
+            !int.TryParse(p[7], out block)) return 0;
+        return FillRegion(bot, x1, y1, z1, x2, y2, z2, block, blocksUsed);
+    }
+
+    // /walls <x1> <y1> <z1> <x2> <y2> <z2> <block>
+    // Fills the four vertical faces of the cuboid; interior is untouched.
+    int TryWalls(PlayerBot bot, string line, int blocksUsed) {
+        string[] p = line.Split(' ');
+        if (p.Length < 8) return 0;
+        int x1, y1, z1, x2, y2, z2, block;
+        if (!int.TryParse(p[1], out x1) || !int.TryParse(p[2], out y1) || !int.TryParse(p[3], out z1) ||
+            !int.TryParse(p[4], out x2) || !int.TryParse(p[5], out y2) || !int.TryParse(p[6], out z2) ||
+            !int.TryParse(p[7], out block)) return 0;
+        Level lvl = bot.level;
+        NormalizeAndClamp(ref x1, ref x2, lvl.MaxX);
+        NormalizeAndClamp(ref y1, ref y2, lvl.MaxY);
+        NormalizeAndClamp(ref z1, ref z2, lvl.MaxZ);
+        // Use bounding box for limit check (conservative)
+        int volume = (x2 - x1 + 1) * (y2 - y1 + 1) * (z2 - z1 + 1);
+        if (volume > MaxBlocksPerOp || blocksUsed + volume > MaxBlocksPerTurn) {
+            Logger.Log(LogType.Warning, "OllamaAgent: block limit exceeded, skipping /walls");
+            return 0;
+        }
+        byte b = (byte)block;
+        int count = 0;
+        for (int x = x1; x <= x2; x++)
+        for (int y = y1; y <= y2; y++)
+        for (int z = z1; z <= z2; z++) {
+            if (x > x1 && x < x2 && z > z1 && z < z2) continue; // skip interior
+            lvl.SetTile((ushort)x, (ushort)y, (ushort)z, b);
+            count++;
+        }
+        for (int x = x1; x <= x2; x++)
+        for (int y = y1; y <= y2; y++)
+        for (int z = z1; z <= z2; z++) {
+            if (x > x1 && x < x2 && z > z1 && z < z2) continue;
+            lvl.BroadcastRevert((ushort)x, (ushort)y, (ushort)z);
+        }
+        return count;
+    }
+
+    // /floor <x1> <z1> <x2> <z2> <y> <block>  (note: y comes after the XZ pairs)
+    // /roof  <x1> <z1> <x2> <z2> <y> <block>  (identical — semantic alias)
+    int TryFloor(PlayerBot bot, string line, int blocksUsed) {
+        string[] p = line.Split(' ');
+        if (p.Length < 7) return 0;
+        int x1, z1, x2, z2, y, block;
+        if (!int.TryParse(p[1], out x1) || !int.TryParse(p[2], out z1) ||
+            !int.TryParse(p[3], out x2) || !int.TryParse(p[4], out z2) ||
+            !int.TryParse(p[5], out y)  || !int.TryParse(p[6], out block)) return 0;
+        return FillRegion(bot, x1, y, z1, x2, y, z2, block, blocksUsed);
+    }
+
+    // /column <x> <y1> <y2> <z> <block>
+    int TryColumn(PlayerBot bot, string line, int blocksUsed) {
+        string[] p = line.Split(' ');
+        if (p.Length < 6) return 0;
+        int x, y1, y2, z, block;
+        if (!int.TryParse(p[1], out x)  || !int.TryParse(p[2], out y1) ||
+            !int.TryParse(p[3], out y2) || !int.TryParse(p[4], out z)  ||
+            !int.TryParse(p[5], out block)) return 0;
+        return FillRegion(bot, x, y1, z, x, y2, z, block, blocksUsed);
+    }
+
+    // /clear <x1> <y1> <z1> <x2> <y2> <z2>
+    int TryClear(PlayerBot bot, string line, int blocksUsed) {
+        string[] p = line.Split(' ');
+        if (p.Length < 7) return 0;
+        int x1, y1, z1, x2, y2, z2;
+        if (!int.TryParse(p[1], out x1) || !int.TryParse(p[2], out y1) || !int.TryParse(p[3], out z1) ||
+            !int.TryParse(p[4], out x2) || !int.TryParse(p[5], out y2) || !int.TryParse(p[6], out z2)) return 0;
+        return FillRegion(bot, x1, y1, z1, x2, y2, z2, 0, blocksUsed);
+    }
+
+    // /door <x> <y> <z>  — 2-high air opening
+    void TryDoor(PlayerBot bot, string line) {
+        string[] p = line.Split(' ');
+        if (p.Length < 4) return;
+        int x, y, z;
+        if (!int.TryParse(p[1], out x) || !int.TryParse(p[2], out y) || !int.TryParse(p[3], out z)) return;
+        Level lvl = bot.level;
+        if (x < 0 || x > lvl.MaxX || y < 0 || y > lvl.MaxY || z < 0 || z > lvl.MaxZ) return;
+        int y2 = Math.Min(y + 1, lvl.MaxY);
+        lvl.SetTile((ushort)x, (ushort)y,  (ushort)z, 0);
+        lvl.SetTile((ushort)x, (ushort)y2, (ushort)z, 0);
+        lvl.BroadcastRevert((ushort)x, (ushort)y,  (ushort)z);
+        lvl.BroadcastRevert((ushort)x, (ushort)y2, (ushort)z);
+    }
+
+    // /window <x> <y> <z>  — place glass (block 20)
+    void TryWindow(PlayerBot bot, string line) {
+        string[] p = line.Split(' ');
+        if (p.Length < 4) return;
+        int x, y, z;
+        if (!int.TryParse(p[1], out x) || !int.TryParse(p[2], out y) || !int.TryParse(p[3], out z)) return;
+        Level lvl = bot.level;
+        if (x < 0 || x > lvl.MaxX || y < 0 || y > lvl.MaxY || z < 0 || z > lvl.MaxZ) return;
+        lvl.SetTile((ushort)x, (ushort)y, (ushort)z, 20);
+        lvl.BroadcastRevert((ushort)x, (ushort)y, (ushort)z);
     }
 
 
@@ -244,23 +389,25 @@ public sealed class OllamaAgentPlugin : Plugin
         // Actions
         sb.AppendFormat(
             "ACTIONS (emit as plain lines in your reply, one per line)\n" +
-            "  /move <x> <y> <z>               walk to those block coords\n" +
-            "  /place <x> <y> <z> <blockId>    place a block (blockId 0 = remove)\n\n" +
-            "BUILDING RULES — read carefully:\n" +
-            "* Each block requires its own /place line with exact absolute coordinates.\n" +
-            "* You can place blocks anywhere in the world without being adjacent — you do NOT need to be standing next to a block to place it.\n" +
-            "* To build a structure, compute every block coordinate yourself and emit one /place per block.\n" +
-            "* Example — a 3-wide, 2-tall stone wall running east from your position ({0},{1},{2}):\n" +
-            "    /place {0} {1} {2} 1\n" +
-            "    /place {3} {1} {2} 1\n" +
-            "    /place {4} {1} {2} 1\n" +
-            "    /place {0} {5} {2} 1\n" +
-            "    /place {3} {5} {2} 1\n" +
-            "    /place {4} {5} {2} 1\n" +
-            "* Only emit /move when you want to reposition yourself. It does NOT place blocks.\n" +
-            "* Never describe what you are building with action lines — just emit the lines.\n\n",
-            bx, by, bz,
-            bx + 1, bx + 2, by + 1);
+            "  /move <x> <y> <z>                              walk to those block coords\n" +
+            "  /place <x> <y> <z> <block>                     place a single block (0=air removes)\n" +
+            "  /box <x1> <y1> <z1> <x2> <y2> <z2> <block>    fill solid cuboid\n" +
+            "  /walls <x1> <y1> <z1> <x2> <y2> <z2> <block>  4 vertical walls, hollow inside\n" +
+            "  /floor <x1> <z1> <x2> <z2> <y> <block>         flat surface at height y\n" +
+            "  /roof <x1> <z1> <x2> <z2> <y> <block>          same as /floor, use for ceilings\n" +
+            "  /column <x> <y1> <y2> <z> <block>              vertical pillar at (x,z)\n" +
+            "  /clear <x1> <y1> <z1> <x2> <y2> <z2>           fill region with air\n" +
+            "  /door <x> <y> <z>                              2-high air opening at y and y+1\n" +
+            "  /window <x> <y> <z>                            place glass here\n\n" +
+            "BUILDING RULES:\n" +
+            "* Use /box, /walls, /floor for any structure larger than a few blocks. Use /place for fine detail only.\n" +
+            "* Integer coordinates only. Calculate all offsets yourself — never write expressions like cx+3.\n" +
+            "* Describe your plan in 1–2 sentences BEFORE emitting any commands.\n" +
+            "* Y increases upward. Floors go at foot level (y), walls start at y+1, roof goes above walls.\n" +
+            "* You can place blocks anywhere in the world without being adjacent to them.\n" +
+            "* Example — a 3×2 stone wall running east from your position ({0},{1},{2}):\n" +
+            "    /box {0} {1} {2} {3} {4} {2} 1\n\n",
+            bx, by, bz, bx + 2, by + 1);
 
         // Full block reference
         sb.Append(
