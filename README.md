@@ -1,6 +1,6 @@
 MCGalaxy is a fully featured and customisable **ClassiCube Server Software** based on MCForge/MCLawl.
 
-**Setup**
+**Setup (pre-built release)**
 -----------------
 Download the latest MCGalaxy release [from here](https://www.classicube.net/mcg/download/)
 * Windows: You need to install .NET framework 4.0. Windows 8/10/11 already have this included.
@@ -8,6 +8,22 @@ Download the latest MCGalaxy release [from here](https://www.classicube.net/mcg/
 * Linux:   You need to install the [Mono framework](https://www.mono-project.com). (or just `apt install mono-complete` if on Ubuntu)
 
 Run **MCGalaxy.exe** for a graphical interface, or run **MCGalaxyCLI.exe** for command line only.
+
+**Setup (building from source)**
+-----------------
+If you cloned or forked the repository, you need to compile before running. The repo contains source code only — no pre-built binaries.
+
+1. Install the [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+2. Build the server:
+```
+dotnet build CLI/MCGalaxyCLI_dotnet8.csproj -c Release
+```
+3. Run the server:
+```
+./start.sh
+```
+
+The `start.sh` script will tell you the exact build command if the binary is missing.
 
 Joining your server
 -----------------

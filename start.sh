@@ -15,4 +15,11 @@ fi
 
 export MCG_DOTNET_PATH=/usr/bin/dotnet
 
+# Copy repo plugins into the server's runtime plugins directory
+SERVER_PLUGINS="$REPO_DIR/CLI/bin/Release/net8.0/plugins"
+mkdir -p "$SERVER_PLUGINS"
+for f in "$REPO_DIR"/plugins/*.cs "$REPO_DIR"/plugins/*-system-prompt.md; do
+    [ -f "$f" ] && cp "$f" "$SERVER_PLUGINS/"
+done
+
 exec "$BINARY"
