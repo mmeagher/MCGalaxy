@@ -37,7 +37,7 @@ public sealed class OllamaAgentLoopPlugin : Plugin
 
     // --- Configuration -------------------------------------------------------
     const string OllamaUrl   = "http://localhost:11434/api/chat";
-    const string OllamaModel = "gemma3";
+    const string OllamaModel = "ministral-3:8b";
     const int    HistoryLimit = 30;  // max conversation turns kept per bot
     const int    MaxSteps     = 15;  // max ReAct iterations per task
     // -------------------------------------------------------------------------
@@ -130,7 +130,8 @@ public sealed class OllamaAgentLoopPlugin : Plugin
                 var    response    = http.PostAsync(OllamaUrl, content).Result;
                 string body        = response.Content.ReadAsStringAsync().Result;
 
-                string reply = StripThinking(ParseContent(body));
+                string parsed = ParseContent(body);
+                string reply  = parsed != null ? StripThinking(parsed) : null;
                 if (string.IsNullOrEmpty(reply)) {
                     Logger.Log(LogType.Warning, "OllamaAgentLoop: empty response at step " + step);
                     break;
