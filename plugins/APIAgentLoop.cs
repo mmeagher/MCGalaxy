@@ -37,8 +37,8 @@ public sealed class APIAgentLoopPlugin : Plugin
     //   OpenAI:    https://api.openai.com/v1/chat/completions
     //   Anthropic: https://api.anthropic.com/v1/messages  (use Anthropic format)
     //   Others:    any OpenAI-compatible provider
-    const string ApiUrl   = "https://api.deepinfra.com/v1/openai";
-    const string ApiModel = "moonshotai/Kimi-K2.5";
+    const string ApiUrl   = "https://api.deepinfra.com/v1/openai/chat/completions";
+    const string ApiModel = "deepseek-ai/DeepSeek-V3.2";
     const string KeyFile  = "plugins/APIAgentLoop.key";  // plain text file containing your API key
     const int    HistoryLimit = 30;  // max conversation turns kept per bot
     const int    MaxSteps     = 15;  // max ReAct iterations per task
